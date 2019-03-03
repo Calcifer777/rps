@@ -1,4 +1,5 @@
 
 def fact(n):
-  fact(0) = 1
-  fact(n) = n*fact(n-1)
+    if n == 0:
+        return 1
+    return n*fact(n-1)
