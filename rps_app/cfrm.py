@@ -14,7 +14,7 @@
 import numpy as np
 from collections import namedtuple
 from matplotlib import pyplot as plt
-
+from matplotlib import animation
 
 Score = namedtuple('Score', ['wins', 'losses', 'draws'])
 
@@ -97,18 +97,17 @@ class CFRMinimizer:
             score['losses'] += 1
         return score
 
-    def plot_training_results(self, fig):
-        fig.clf()
+    def plot_training_results(self, axis):
+        if np.shape(model.strategy_hist)[0]<2:
+            return
+        axis.clear()
         x = np.arange(np.shape(model.strategy_hist)[0])
         for k, v in self.actions.items():
             plt.plot(x, model.strategy_hist[:, v], label=k)
-            plt.legend(loc='upper right')
-            plt.xlabel('Turni')
-            plt.ylabel('Probabilità')
 
     def play(self):
         score = {'wins': 0, 'draws': 0, 'losses': 0}
-
+        games = 1
         while True:
             strategy = self.get_average_strategy()
             my_action = self.get_action(strategy)
@@ -118,7 +117,7 @@ class CFRMinimizer:
                     break
             else:
                 assert False, 'Some error occurred'
-            player_action_label = input('Fai la tua mossa (carta, forbice, sasso): ')
+            player_action_label = input('Fai la tua mossa (carta, forbici, sasso): ')
             if player_action_label in self.actions:
                 player_action = self.actions[player_action_label]
             else:
@@ -128,10 +127,10 @@ class CFRMinimizer:
             self.online_train(my_action, player_action)
             score = self.update_score(score, my_action, player_action)
             # Print updated results
-            msg = f"V: {score['wins']}\tP: {score['draws']}\tS: {score['losses']}"
+            msg = f"G: {games}\tV: {score['wins']}\tP: {score['draws']}\tS: {score['losses']}"
             print(msg)
-            # print(self.strategy_hist)
-            # self.plot_training_results(fig)
+            games += 1
+
 
 if __name__ == '__main__':
 
@@ -151,4 +150,13 @@ if __name__ == '__main__':
     # plt.ylabel('Probabilities')
     # plt.show()
 
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+
+    ax.legend(loc='upper right')
+    plt.xlabel('Turni')
+    plt.ylabel('Probabilità')
+
+    aninmation = animation.FuncAnimation(fig, model.plot_training_results, interval=1000)
+    plt.show()
     model.play()
