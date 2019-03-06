@@ -12,26 +12,34 @@
 #       divided by the number of iterations
 
 import numpy as np
-from collections import namedtuple
 from matplotlib import pyplot as plt
-from matplotlib import animation
-
-Score = namedtuple('Score', ['wins', 'losses', 'draws'])
+import os
 
 
 class CFRMinimizer:
 
-    def __init__(self):
-        self.num_actions = 3
-        self.actions = {'sasso': 0, 'carta': 1, 'forbici': 2, }
+    action_labels = {0: 'R', 1: 'S', 2: 'P', 'R': 0, 'S': 1, 'P': 2}
+    log_filename = 'log.txt'
+
+    def __init__(self, actions=('R', 'P', 'S', )):
+        self.num_actions = len(actions)
+        self.actions = {k: v for k, v in zip(actions, range(self.num_actions))}
         self.regret_sum = np.zeros(shape=self.num_actions, dtype=float)
         self.strategy = np.zeros(shape=self.num_actions, dtype=float)
         self.strategy_hist = np.array(self.strategy, ndmin=2)
         self.strategy_sum = np.zeros(shape=self.num_actions, dtype=float)
+        self.reset_log()
+
+    @classmethod
+    def reset_log(cls):
+        try:
+            os.remove(cls.log_filename)
+        except OSError:
+            pass
 
     def get_action(self, strategy):
         result = np.random.choice(list(self.actions.keys()), p=strategy)
-        return self.actions[result]
+        return result
 
     def get_strategy(self):
         # Get current mixed strategy through regret-matching
@@ -47,6 +55,11 @@ class CFRMinimizer:
         self.strategy_hist = np.concatenate((self.strategy_hist,
                                              np.array(self.strategy_sum/sum(self.strategy_sum), ndmin=2))
                                             )
+        with open(self.log_filename, 'a+') as fp:
+            for x in self.strategy_sum / sum(self.strategy_sum):
+                fp.write(str(x))
+            fp.write("\n")
+
         return self.strategy
 
     def get_average_strategy(self):
@@ -56,107 +69,63 @@ class CFRMinimizer:
         else:
             return [1.0/self.num_actions]*self.num_actions
 
-    def get_utility(self, action_1, action_2):
-        result = (action_2 - action_1) % self.num_actions
-        assert result in [0, 1, 2], 'Error in utilities computation'
-        if result == 2:
+    def get_utility(self, a1, a2):
+        if any([
+            (a1 == 'R' and a2 == 'S'),
+            (a1 == 'S' and a2 == 'P'),
+            (a1 == 'P' and a2 == 'R'),
+        ]):
             return 1
-        elif result == 1:
-            return -1
-        else:
+        elif a1 == a2:
             return 0
+        else:
+            return -1
 
     def batch_train(self, epochs, opp_strategy):
         for _ in range(epochs):
             # Get regret-matched mixed-strategy actions
             self.get_strategy()
-            my_action = self.get_action(self.strategy)
-            opp_action = self.get_action(opp_strategy)
+            my_action = self.get_action(self.strategy)  # 0 | 1 | 2
+            opp_action = self.get_action(opp_strategy)  # 0 | 1 | 2
             # Compute action utilities
-            utilities = np.array([self.get_utility(action, opp_action)
-                                  for action in self.actions.values()])
+            utilities = np.array([self.get_utility(action, opp_action) for action in self.actions.keys()])
             # Accumulate action regrets
-            self.regret_sum += utilities - np.array([self.get_utility(my_action, opp_action)]*self.num_actions)
+            regret_update = utilities - np.array([self.get_utility(my_action, opp_action)]*self.num_actions)
+            self.regret_sum += regret_update
 
     def online_train(self, my_action, opp_action):
+        assert my_action in self.actions, f"Errore nell'input di {self.online_train.__name__}: my_action={my_action}"
+        assert opp_action in self.actions, f"Errore nell'input di {self.online_train.__name__}: opp_action={opp_action}"
         # Get regret-matched mixed-strategy actions
         self.get_strategy()
         # Compute action utilities
-        utilities = np.array([self.get_utility(action, opp_action)
-                              for action in self.actions.values()])
+        utilities = np.array([self.get_utility(action, opp_action) for action in self.actions.values()])
         # Accumulate action regrets
-        self.regret_sum += utilities - np.array([self.get_utility(my_action, opp_action)] * self.num_actions)
-
-    def update_score(self, score, my_action, player_action):
-        utility = self.get_utility(player_action, my_action)
-        if utility == 1:
-            score['wins'] += 1
-        elif utility == 0:
-            score['draws'] += 1
-        else:
-            score['losses'] += 1
-        return score
-
-    def plot_training_results(self, axis):
-        if np.shape(model.strategy_hist)[0]<2:
-            return
-        axis.clear()
-        x = np.arange(np.shape(model.strategy_hist)[0])
-        for k, v in self.actions.items():
-            plt.plot(x, model.strategy_hist[:, v], label=k)
+        regret_update = utilities - np.array([self.get_utility(my_action, opp_action)] * self.num_actions)
+        self.regret_sum += regret_update
 
     def play(self):
-        score = {'wins': 0, 'draws': 0, 'losses': 0}
-        games = 1
-        while True:
-            strategy = self.get_average_strategy()
-            my_action = self.get_action(strategy)
-            for k, v in self.actions.items():
-                if my_action == v:
-                    my_action_label = k
-                    break
-            else:
-                assert False, 'Some error occurred'
-            player_action_label = input('Fai la tua mossa (carta, forbici, sasso): ')
-            if player_action_label in self.actions:
-                player_action = self.actions[player_action_label]
-            else:
-                print("Mossa non valida.\n")
-                continue
-            print(f"{player_action_label} vs {my_action_label}")
-            self.online_train(my_action, player_action)
-            score = self.update_score(score, my_action, player_action)
-            # Print updated results
-            msg = f"G: {games}\tV: {score['wins']}\tP: {score['draws']}\tS: {score['losses']}"
-            print(msg)
-            games += 1
+        strategy = self.get_average_strategy()  # [0.2, 0.3, 0.5]
+        return self.get_action(strategy)  # 'R', 'P', 'S'
 
 
 if __name__ == '__main__':
 
     model = CFRMinimizer()
 
-    # # Batch training example
-    # epochs = 100
-    # vs_strategy = np.array([0.3, 0.4, 0.3,])
-    # model.batch_train(epochs, vs_strategy)
-    # # Print training results
-    # x = np.arange(np.shape(model.strategy_hist)[0])
-    # fig = plt.figure()
-    # for k, v in model.actions.items():
-    #     plt.plot(x, model.strategy_hist[:, v], label=k)
-    # plt.legend(loc='upper right')
-    # plt.xlabel('Epochs')
-    # plt.ylabel('Probabilities')
-    # plt.show()
-
+    # Batch training example
+    epochs = 100
+    vs_strategy = np.array([0.2, 0.2, 0.6,])  # Pr[R], Pr[P], Pr[S]
+    model.batch_train(epochs, vs_strategy)
+    print(model.strategy_hist[-5:, :])
+    # Print training results
+    x = np.arange(np.shape(model.strategy_hist)[0])
     fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-
-    ax.legend(loc='upper right')
-    plt.xlabel('Turni')
-    plt.ylabel('Probabilità')
-
-    aninmation = animation.FuncAnimation(fig, model.plot_training_results, interval=1000)
+    for k, v in model.actions.items():
+        plt.plot(x, model.strategy_hist[:, v], label=k)
+    plt.legend(loc='upper right')
+    plt.xlabel('Epochs')
+    plt.ylabel('Probabilities')
     plt.show()
-    model.play()
+
+
