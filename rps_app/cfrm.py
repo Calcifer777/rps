@@ -88,34 +88,25 @@ class CFRMinimizer:
         else:
             return -1
 
-    def online_train(self, opp_action):
-        assert opp_action in self.actions, f'Error while training vs opp_action: {opp_action}'
-        # Get regret-matched mixed-strategy actions
-        strategy = self.get_strategy()
-        my_action = self.get_action(strategy)
-        # Compute action utilities
-        utilities = np.array([self.get_utility(a, opp_action) for a in self.actions])
-        # Accumulate action regrets
-        regret = utilities - np.array([self.get_utility(my_action, opp_action)] * self.num_actions)
-        self.regret_hist = np.concatenate((self.regret_hist, np.array(regret, ndmin=2)))
-
     def batch_train(self, opp_actions):
         old_strategy = self.get_average_strategy()
         for opp_action in opp_actions:
-            self.online_train(opp_action)
+            strategy = self.get_strategy()
+            my_action = self.get_action(strategy)
+            # Compute action utilities
+            utilities = np.array([self.get_utility(a, opp_action) for a in self.actions])
+            # Accumulate action regrets
+            regret = utilities - np.array([self.get_utility(my_action, opp_action)] * self.num_actions)
+            self.regret_hist = np.concatenate((self.regret_hist, np.array(regret, ndmin=2)))
+
             strategy_change = np.round(self.get_average_strategy() - old_strategy, 3)
             old_strategy = self.get_average_strategy()
             if self.debug:
                 print(f"Opp. Action: {opp_action}, DeltaStrategy: {strategy_change}")
 
-    def play(self):
-        strategy = self.get_average_strategy()  # [0.2, 0.3, 0.5]
-        return self.get_action(strategy)  # 'R', 'P', 'S'
-
-
 if __name__ == '__main__':
 
-    model = CFRMinimizer(debug=True, decay=0.9)
+    model = CFRMinimizer(decay=1)
 
     # Batch training example
     epochs = 1000
