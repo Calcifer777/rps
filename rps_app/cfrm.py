@@ -14,20 +14,22 @@
 import numpy as np
 from matplotlib import pyplot as plt
 import os
+import math
 
 
 class CFRMinimizer:
 
     log_filename = 'log.txt'
 
-    def __init__(self, actions=('R', 'P', 'S', ), decay=1):
+    def __init__(self, actions=('R', 'P', 'S', ), decay=1, debug=False, log=False):
         self.num_actions = len(actions)
         self.actions = actions
-        self.regret_hist = np.array([[0, 0, 0]], ndmin=2, dtype=float)
-        self.strategy = np.zeros(shape=self.num_actions, dtype=float)
-        self.strategy_hist = np.array(self.strategy, ndmin=2)
+        self.regret_hist =  np.zeros(shape=(1, 3), dtype=float)
+        self.strategy_hist = np.zeros(shape=(1, 3), dtype=float)
         self.reset_log()
         self.decay = decay
+        self.debug = debug
+        self.log = log
 
     @classmethod
     def reset_log(cls):
@@ -37,41 +39,44 @@ class CFRMinimizer:
             pass
 
     def get_action(self, strategy):
+        assert math.isclose(sum(strategy), 1, rel_tol=1e-4), "La strategia {strategy} non è valida"
         result = np.random.choice(self.actions, p=strategy)
         return result
 
     def get_strategy(self):
         # Get current mixed strategy through regret-matching
         decay_hist = np.array([self.decay**t for t in range(np.shape(self.regret_hist)[0])], ndmin=2).T
-        regret_sum = np.sum(self.regret_hist*decay_hist, axis=0)
+        regret_sum = np.sum(self.regret_hist*decay_hist[::-1], axis=0)
         normalizing_sum = 0
+        strategy = np.zeros(3, dtype=float)
         for i in range(self.num_actions):
-            self.strategy[i] = regret_sum[i] if regret_sum[i] > 0 else 0
-            normalizing_sum += self.strategy[i]
+            strategy[i] = regret_sum[i] if regret_sum[i] > 0 else 0
+            normalizing_sum += strategy[i]
         if normalizing_sum == 0:
-            self.strategy = np.array([1.0/self.num_actions]*self.num_actions)
+            strategy = np.array([1.0/self.num_actions]*self.num_actions)
         else:
-            self.strategy = self.strategy/normalizing_sum
-        self.strategy_hist = np.concatenate((self.strategy_hist,
-                                             np.array(self.strategy/sum(self.strategy), ndmin=2))
-                                            )
-        with open(self.log_filename, 'a+') as fp:
-            fp.write(', '.join(str(np.round(p, 4)) for p in self.strategy / sum(self.strategy)))
-            fp.write("\n")
+            strategy = strategy/normalizing_sum
+        self.strategy_hist = np.concatenate((self.strategy_hist, np.array(strategy/sum(strategy), ndmin=2)))
 
-        return self.strategy
+        if self.log:
+            with open(self.log_filename, 'a+') as fp:
+                fp.write(', '.join(str(np.round(p, 4)) for p in strategy / sum(strategy)))
+                fp.write("\n")
+
+        return strategy
 
     def get_average_strategy(self):
-        decay_hist = np.array([self.decay ** t for t in range(np.shape(self.regret_hist)[0])], ndmin=2).T
-        strategy_sum = np.sum(self.strategy_hist * decay_hist, axis=0)
+        # Create a discount vector based on the decay rate. Its length is the same as the number of previous turns
+        decay_hist = np.array([self.decay**t for t in range(np.shape(self.regret_hist)[0])], ndmin=2).T
+        strategy_sum = np.sum(self.strategy_hist * decay_hist[::-1], axis=0)
         # Get average mixed strategy across all training iterations
         if sum(strategy_sum) > 0:
             return strategy_sum / sum(strategy_sum)
         else:
             return [1.0/self.num_actions]*self.num_actions
 
-    @staticmethod
-    def get_utility(a1, a2):
+    def get_utility(self, a1, a2):
+        assert all([a in self.actions for a in (a1, a2)]), f'Error while evaluating a1: {a1} vs a2: {a2}'
         if any([
             (a1 == 'R' and a2 == 'S'),
             (a1 == 'S' and a2 == 'P'),
@@ -83,28 +88,25 @@ class CFRMinimizer:
         else:
             return -1
 
-    def batch_train(self, num_epochs, opp_strategy):
-        for _ in range(num_epochs):
-            # Get regret-matched mixed-strategy actions
-            self.get_strategy()
-            my_action = self.get_action(self.strategy)  # 'R', 'P', 'S'
-            opp_action = self.get_action(opp_strategy)  # 'R', 'P', 'S'
-            # Compute action utilities
-            utilities = np.array([self.get_utility(a, opp_action) for a in self.actions])
-            # Accumulate action regrets
-            regret = utilities - np.array([self.get_utility(my_action, opp_action)]*self.num_actions)
-            self.regret_hist = np.concatenate((self.regret_hist, np.array(regret, ndmin=2)))
-
-    def online_train(self, my_action, opp_action):
-        assert my_action in self.actions, f"Errore nell'input di {self.online_train.__name__}: my_action={my_action}"
-        assert opp_action in self.actions, f"Errore nell'input di {self.online_train.__name__}: opp_action={opp_action}"
+    def online_train(self, opp_action):
+        assert opp_action in self.actions, f'Error while training vs opp_action: {opp_action}'
         # Get regret-matched mixed-strategy actions
-        self.get_strategy()
+        strategy = self.get_strategy()
+        my_action = self.get_action(strategy)
         # Compute action utilities
         utilities = np.array([self.get_utility(a, opp_action) for a in self.actions])
         # Accumulate action regrets
         regret = utilities - np.array([self.get_utility(my_action, opp_action)] * self.num_actions)
         self.regret_hist = np.concatenate((self.regret_hist, np.array(regret, ndmin=2)))
+
+    def batch_train(self, opp_actions):
+        old_strategy = self.get_average_strategy()
+        for opp_action in opp_actions:
+            self.online_train(opp_action)
+            strategy_change = np.round(self.get_average_strategy() - old_strategy, 3)
+            old_strategy = self.get_average_strategy()
+            if self.debug:
+                print(f"Opp. Action: {opp_action}, DeltaStrategy: {strategy_change}")
 
     def play(self):
         strategy = self.get_average_strategy()  # [0.2, 0.3, 0.5]
@@ -113,18 +115,23 @@ class CFRMinimizer:
 
 if __name__ == '__main__':
 
-    model = CFRMinimizer()
+    model = CFRMinimizer(debug=True, decay=0.9)
 
     # Batch training example
-    epochs = 100
-    vs_strategy = np.array([0.2, 0.2, 0.6, ])  # Pr[R], Pr[P], Pr[S]
-    model.batch_train(epochs, vs_strategy)
-    print(model.strategy_hist[:20])
-    # Print training results
-    x = np.arange(np.shape(model.strategy_hist)[0])
+    epochs = 1000
+    vs_strategy = np.array([0.4, 0.3, 0.3, ])  # Pr[R], Pr[P], Pr[S]
+    vs_actions = [model.get_action(vs_strategy) for _ in range(epochs)]
+
+    model.batch_train(vs_actions)
+
+    # # Print training results
+    x = np.arange(np.shape(model.strategy_hist)[0]-1)
+    linestyles = ['dashed', 'dashdot', 'dotted']
     fig = plt.figure()
     for idx, action in enumerate(model.actions):
-        plt.plot(x, np.cumsum(model.strategy_hist[:, idx])/np.sum(np.cumsum(model.strategy_hist, axis=0), axis=1), label=action)
+        plt.plot(x, np.cumsum(model.strategy_hist[1:, idx])/np.sum(np.cumsum(model.strategy_hist[1:], axis=0), axis=1),
+                 label=action,
+                 linestyle = linestyles[idx])
     plt.legend(loc='upper right')
     plt.xlabel('Epochs')
     plt.ylabel('Probabilities')
